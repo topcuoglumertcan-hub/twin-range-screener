@@ -23,11 +23,11 @@ with col1:
         "4 Saat (240m)": "240m",
         "1 Gün (1d)": "1d"
     }
-    selected_label = st.selectbox("Zaman Dilimi", options=list(interval_map.keys()), index=0)
+    selected_label = st.selectbox("Zaman Dilimi", options=list(interval_map.keys()), index=3)
     selected_interval = interval_map[selected_label]
 
 with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=30))
+    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=60))
 
 with col3:
     end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
@@ -74,9 +74,12 @@ def calculate_signals(df, symbol, start_d, end_d):
     df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
 
     signal_rows = []
-    for idx, row in df.iterrows():
-        # Tarih filtresini pandas index üzerinden tam uygula
+    # İlk 60 barı (hesaplama ısınma süresi/burn-in) atlıyoruz ki sahte sinyal çıkmasın
+    for i in range(60, len(df)):
+        idx = df.index[i]
+        row = df.iloc[i]
         row_date = pd.to_datetime(idx).date()
+        
         if start_d <= row_date <= end_d:
             sig = None
             if row['Long']: sig = "🟢 BUY (AL)"
@@ -95,7 +98,6 @@ if st.button("Taramayı Başlat 🔍", type="primary"):
     all_signals = []
     for symbol in selected_stocks:
         try:
-            # Matematiksel hesap için yeterli geçmişi çekip, sonuçta kullanıcı tarihini filtreleyeceğiz
             df = yf.download(symbol, period="max", interval=selected_interval, progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
