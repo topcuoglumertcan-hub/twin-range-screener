@@ -4,10 +4,10 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="BIST Twin Range Tarayıcı", layout="wide")
+st.set_page_config(page_title="BIST Twin Range Sinyal Tarayıcı", layout="wide")
 
 st.title("🚀 BIST Twin Range Sinyal Tarayıcı")
-st.markdown("Seçtiğiniz periyotta hisselerin ürettiği **AL/SAT** sinyallerini listeleyin.")
+st.markdown("Seçtiğiniz tarih aralığına ve periyoda göre AL/SAT sinyallerini listeleyin.")
 
 bist_all_stocks = [
     "THYAO.IS", "GARAN.IS", "EREGL.IS", "ASELS.IS", "KCHOL.IS", "AKBNK.IS",
@@ -27,14 +27,14 @@ with col1:
     selected_interval = interval_map[selected_label]
 
 with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=15))
+    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=30))
 
 with col3:
     end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
 
 selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["THYAO.IS"])
 
-def calculate_signals(df, symbol):
+def calculate_signals(df, symbol, start_d, end_d):
     if df.empty or len(df) < 55:
         return pd.DataFrame()
     
@@ -75,29 +75,32 @@ def calculate_signals(df, symbol):
 
     signal_rows = []
     for idx, row in df.iterrows():
-        sig = None
-        if row['Long']: sig = "🟢 BUY (AL)"
-        elif row['Short']: sig = "🔴 SELL (SAT)"
-        
-        if sig:
-            signal_rows.append({
-                'Hisse': symbol.replace('.IS', ''),
-                'Tarih / Saat': str(idx),
-                'Fiyat': round(row['Close'], 2),
-                'Sinyal': sig
-            })
+        # Tarih filtresini pandas index üzerinden tam uygula
+        row_date = pd.to_datetime(idx).date()
+        if start_d <= row_date <= end_d:
+            sig = None
+            if row['Long']: sig = "🟢 BUY (AL)"
+            elif row['Short']: sig = "🔴 SELL (SAT)"
+            
+            if sig:
+                signal_rows.append({
+                    'Hisse': symbol.replace('.IS', ''),
+                    'Tarih / Saat': str(idx),
+                    'Fiyat': round(row['Close'], 2),
+                    'Sinyal': sig
+                })
     return pd.DataFrame(signal_rows)
 
 if st.button("Taramayı Başlat 🔍", type="primary"):
     all_signals = []
     for symbol in selected_stocks:
         try:
-            # period parametresi ile yfinance garanti veri çeker
-            df = yf.download(symbol, period="1mo", interval=selected_interval, progress=False)
+            # Matematiksel hesap için yeterli geçmişi çekip, sonuçta kullanıcı tarihini filtreleyeceğiz
+            df = yf.download(symbol, period="max", interval=selected_interval, progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                sig_df = calculate_signals(df, symbol)
+                sig_df = calculate_signals(df, symbol, start_date, end_date)
                 if not sig_df.empty:
                     all_signals.append(sig_df)
         except Exception as e:
@@ -105,7 +108,8 @@ if st.button("Taramayı Başlat 🔍", type="primary"):
 
     if all_signals:
         final_df = pd.concat(all_signals, ignore_index=True)
-        st.success(f"Toplam {len(final_df)} sinyal bulundu:")
+        final_df = final_df.sort_values(by="Tarih / Saat", ascending=False)
+        st.success(f"Seçilen tarih aralığında toplam {len(final_df)} sinyal bulundu:")
         st.dataframe(final_df, use_container_width=True)
     else:
-        st.warning("Seçilen periyotta sinyal bulunamadı. (Not: Yahoo Finance saatlik verilerinde anlık gecikmeler olabilir, günlük '1d' seçerek test edebilirsiniz).")
+        st.warning("Seçilen tarih aralığında bu periyotta hiçbir AL/SAT sinyali bulunamadı.")
