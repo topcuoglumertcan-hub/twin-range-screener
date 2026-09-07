@@ -7,9 +7,8 @@ import yfinance as yf
 st.set_page_config(page_title="BIST Günlük Sinyal Tarayıcı", layout="wide")
 
 st.title("🚀 BIST Twin Range Günlük Sinyal Tarayıcı")
-st.markdown("Seçtiğiniz tarihte (örneğin bugün) kapanış bazlı **AL** veya **SAT** sinyali üreten hisseleri listeleyin.")
+st.markdown("Seçtiğiniz tarihte kapanış bazlı **AL** veya **SAT** sinyali üreten hisseleri listeleyin.")
 
-# Borsa İstanbul Örnek / Genişletilmiş Hisse Listesi
 bist_all_stocks = [
     "THYAO.IS", "GARAN.IS", "EREGL.IS", "ASELS.IS", "KCHOL.IS", "AKBNK.IS",
     "ISCTR.IS", "BIMAS.IS", "PGSUS.IS", "SASA.IS", "TUPRS.IS", "PETKM.IS",
@@ -21,11 +20,11 @@ bist_all_stocks = [
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    selected_interval = "1d" # Kesin sonuç için günlük periyot sabitlendi
+    selected_interval = "1d"
     st.info("Zaman Dilimi: **1 Gün (1d)**")
 
 with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today())
+    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=5))
 
 with col3:
     end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
@@ -33,12 +32,11 @@ with col3:
 selection_mode = st.radio("Hisse Seçim Yöntemi:", ["Özel Hisse Seç", "Tüm Listeyi Tara"], horizontal=True)
 
 if selection_mode == "Özel Hisse Seç":
-    selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["THYAO.IS", "GARAN.IS", "KCHOL.IS"])
+    selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["EREGL.IS", "THYAO.IS"])
 else:
     selected_stocks = bist_all_stocks
 
 def calculate_daily_signals(df, symbol, start_d, end_d):
-    # Matematiksel hesap için en az 100 günlük geçmiş veri şarttır (burn-in süresi)
     if df.empty or len(df) < 55:
         return pd.DataFrame()
     
@@ -78,8 +76,8 @@ def calculate_daily_signals(df, symbol, start_d, end_d):
     df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
 
     signal_rows = []
-    # Isınma süresini atlıyoruz
-    for i in range(60, len(df)):
+    # Canlı/anlık hatalı barları elemek için son mumu (bugünü) tarama dışı bırakıyoruz ( len(df) - 1 )
+    for i in range(60, len(df) - 1):
         idx = df.index[i]
         row = df.iloc[i]
         row_date = pd.to_datetime(idx).date()
@@ -107,7 +105,6 @@ if st.button("Günlük Sinyalleri Taramayı Başlat 🔍", type="primary"):
     for idx, symbol in enumerate(selected_stocks):
         status_text.text(f"Taranıyor ({idx+1}/{total}): {symbol}...")
         try:
-            # Günlük veri için yeterli geçmiş (max) çekilir ki indikatör doğru hesaplasın
             df = yf.download(symbol, period="max", interval=selected_interval, progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
@@ -125,7 +122,7 @@ if st.button("Günlük Sinyalleri Taramayı Başlat 🔍", type="primary"):
     if all_signals:
         final_df = pd.concat(all_signals, ignore_index=True)
         final_df = final_df.sort_values(by="Tarih", ascending=False)
-        st.success(f"Seçilen tarihte toplam **{len(final_df)}** adet sinyal bulundu:")
+        st.success(f"Seçilen aralıkta toplam **{len(final_df)}** adet kesinleşmiş sinyal bulundu:")
         st.dataframe(final_df, use_container_width=True)
     else:
-        st.warning("Seçilen tarihte (günlük periyotta) yeni bir AL veya SAT kesişimi gerçekleşmemiş.")
+        st.warning("Seçilen tarih aralığında kesinleşmiş yeni bir AL veya SAT sinyali bulunamadı.")
