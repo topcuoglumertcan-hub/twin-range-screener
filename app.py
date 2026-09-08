@@ -4,39 +4,30 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="BIST Günlük Sinyal Tarayıcı", layout="wide")
+st.set_page_config(page_title="BIST Twin Range Toplu Tarayıcı", layout="wide")
 
-st.title("🚀 BIST Twin Range Günlük Sinyal Tarayıcı")
-st.markdown("TradingView ile %100 matematiksel uyumlu kapanış bazlı **AL** ve **SAT** sinyali tarayıcısı.")
+st.title("🚀 BIST Twin Range Filter - Toplu Sinyal ve Durum Tarayıcı")
+st.markdown("Tüm BIST hisselerini tek ekranda listeleyin, güncel durumlarını görün ve dışarı aktarın.")
 
+# Genişletilmiş BIST Hisse Listesi (.IS uzantılı)
 bist_all_stocks = [
     "THYAO.IS", "GARAN.IS", "EREGL.IS", "ASELS.IS", "KCHOL.IS", "AKBNK.IS",
     "ISCTR.IS", "BIMAS.IS", "PGSUS.IS", "SASA.IS", "TUPRS.IS", "PETKM.IS",
     "AKCNS.IS", "ALARK.IS", "ARCLK.IS", "ASTOR.IS", "ENKAI.IS", "FROTO.IS",
     "GESAN.IS", "GUBRF.IS", "KRDMD.IS", "ODAS.IS", "SAHOL.IS", "SISE.IS",
-    "TAVHL.IS", "TOASO.IS", "YKBNK.IS"
+    "TAVHL.IS", "TOASO.IS", "YKBNK.IS", "BRSAN.IS", "FZLGY.IS"
 ]
 
-col1, col2, col3 = st.columns(3)
-
+col1, col2 = st.columns(2)
 with col1:
-    selected_interval = "1d"
-    st.info("Zaman Dilimi: **1 Gün (1d)**")
+    selection_mode = st.radio("Hisse Seçimi:", ["Tüm Listeyi Tara", "Özel Seçim Yap"], horizontal=True)
 
-with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=90))
-
-with col3:
-    end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
-
-selection_mode = st.radio("Hisse Seçim Yöntemi:", ["Özel Hisse Seç", "Tüm Listeyi Tara"], horizontal=True)
-
-if selection_mode == "Özel Hisse Seç":
-    selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["ASELS.IS"])
+if selection_mode == "Özel Seçim Yap":
+    selected_stocks = st.multiselect("Hisseleri Seçin:", options=bist_all_stocks, default=["THYAO.IS", "EREGL.IS", "ASELS.IS"])
 else:
     selected_stocks = bist_all_stocks
 
-# TradingView'in ta.ema fonksiyonunun birebir Python karşılığı (SMA başlangıçlı)
+# TradingView ile birebir uyumlu EMA (SMA başlangıçlı)
 def tv_ema(arr, length):
     alpha = 2.0 / (length + 1)
     res = np.zeros_like(arr, dtype=float)
@@ -47,100 +38,103 @@ def tv_ema(arr, length):
         res[i] = alpha * arr[i] + (1.0 - alpha) * res[i - 1]
     return res
 
-def calculate_daily_signals(df, symbol, start_d, end_d):
-    if df.empty or len(df) < 60:
-        return pd.DataFrame()
-    
-    per1, mult1 = 27, 1.6
-    per2, mult2 = 55, 2.0
-    x = df['Close'].values
-    
-    diff = np.abs(np.diff(x, prepend=x[0]))
-    
-    wper1 = per1 * 2 - 1
-    avrng1 = tv_ema(diff, per1)
-    smrng1 = tv_ema(avrng1, wper1) * mult1
-
-    wper2 = per2 * 2 - 1
-    avrng2 = tv_ema(diff, per2)
-    smrng2 = tv_ema(avrng2, wper2) * mult2
-
-    smrng = (smrng1 + smrng2) / 2
-
-    filt = np.zeros_like(x)
-    f = x[0]
-    for i in range(len(x)):
-        val = x[i]
-        r = smrng[i]
-        if np.isnan(r): r = 0
-        if i > 0:
-            prev = filt[i-1]
-            if val > prev:
-                f = prev if (val - r < prev) else (val - r)
-            else:
-                f = prev if (val + r > prev) else (val + r)
-        filt[i] = f
-
-    df['TRF'] = filt
-    df['Long'] = (df['Close'] > df['TRF']) & (df['Close'].shift(1) <= df['TRF'].shift(1))
-    df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
-
-    signal_rows = []
-    # Isınma payı bırakılarak tarama yapılır
-    for i in range(60, len(df) - 1):
-        idx = df.index[i]
-        row = df.iloc[i]
-        row_date = pd.to_datetime(idx).date()
+def analyze_stock(symbol):
+    try:
+        df = yf.download(symbol, period="max", interval="1d", progress=False)
+        if df.empty or len(df) < 60:
+            return None
         
-        sig = None
-        if row['Long']: sig = "🟢 BUY (AL)"
-        elif row['Short']: sig = "🔴 SELL (SAT)"
-        
-        if sig:
-            signal_rows.append({
-                'Hisse': symbol.replace('.IS', ''),
-                'Tarih': str(row_date),
-                'Kapanış Fiyatı': round(row['Close'], 2),
-                'Sinyal': sig
-            })
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
             
-    res_df = pd.DataFrame(signal_rows)
-    if not res_df.empty:
-        res_df['Tarih_dt'] = pd.to_datetime(res_df['Tarih']).dt.date
-        tol_start = start_d - datetime.timedelta(days=1)
-        tol_end = end_d + datetime.timedelta(days=1)
-        res_df = res_df[(res_df['Tarih_dt'] >= tol_start) & (res_df['Tarih_dt'] <= tol_end)]
-        res_df = res_df.drop(columns=['Tarih_dt'])
+        per1, mult1 = 27, 1.6
+        per2, mult2 = 55, 2.0
+        x = df['Close'].values
         
-    return res_df
+        diff = np.abs(np.diff(x, prepend=x[0]))
+        
+        wper1 = per1 * 2 - 1
+        avrng1 = tv_ema(diff, per1)
+        smrng1 = tv_ema(avrng1, wper1) * mult1
 
-if st.button("Günlük Sinyalleri Taramayı Başlat 🔍", type="primary"):
-    all_signals = []
+        wper2 = per2 * 2 - 1
+        avrng2 = tv_ema(diff, per2)
+        smrng2 = tv_ema(avrng2, wper2) * mult2
+
+        smrng = (smrng1 + smrng2) / 2
+
+        filt = np.zeros_like(x)
+        f = x[0]
+        for i in range(len(x)):
+            val = x[i]
+            r = smrng[i]
+            if np.isnan(r): r = 0
+            if i > 0:
+                prev = filt[i-1]
+                if val > prev:
+                    f = prev if (val - r < prev) else (val - r)
+                else:
+                    f = prev if (val + r > prev) else (val + r)
+            filt[i] = f
+
+        df['TRF'] = filt
+        df['Long'] = (df['Close'] > df['TRF']) & (df['Close'].shift(1) <= df['TRF'].shift(1))
+        df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
+        df['Is_Long_Trend'] = df['Close'] > df['TRF']
+
+        # Son durumu al
+        current_trend = "AL" if df['Is_Long_Trend'].iloc[-2] else "SAT" # Canlı bar hariç kapanmış son gün
+        
+        # Son sinyal tarihini ve fiyatını bul
+        sig_date = "-"
+        sig_price = 0.0
+        
+        for i in range(len(df)-2, 59, -1):
+            if df['Long'].iloc[i] or df['Short'].iloc[i]:
+                sig_date = str(df.index[i].date())
+                sig_price = round(df['Close'].iloc[i], 2)
+                break
+
+        return {
+            'Hisse': symbol.replace('.IS', ''),
+            'Güncel Fiyat': round(df['Close'].iloc[-2], 2),
+            'Durum': current_trend,
+            'Sinyal Tarihi': sig_date,
+            'Sinyal Fiyatı': sig_price
+        }
+    except Exception as e:
+        return None
+
+if st.button("Toplu Taramayı Başlat 🔍", type="primary"):
+    results = []
     progress_bar = st.progress(0)
     status_text = st.empty()
 
     total = len(selected_stocks)
     for idx, symbol in enumerate(selected_stocks):
         status_text.text(f"Taranıyor ({idx+1}/{total}): {symbol}...")
-        try:
-            df = yf.download(symbol, period="max", interval=selected_interval, progress=False)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                sig_df = calculate_daily_signals(df, symbol, start_date, end_date)
-                if not sig_df.empty:
-                    all_signals.append(sig_df)
-        except Exception as e:
-            continue
+        res = analyze_stock(symbol)
+        if res:
+            results.append(res)
         progress_bar.progress((idx + 1) / total)
 
     status_text.text("Tarama tamamlandı!")
     progress_bar.empty()
 
-    if all_signals:
-        final_df = pd.concat(all_signals, ignore_index=True)
-        final_df = final_df.sort_values(by="Tarih", ascending=False)
-        st.success(f"Seçilen aralıkta toplam **{len(final_df)}** adet sinyal bulundu:")
-        st.dataframe(final_df, use_container_width=True)
+    if results:
+        res_df = pd.DataFrame(results)
+        st.success(f"Toplam **{len(res_df)}** hisse başarıyla tarandı:")
+        
+        # Ekranda göster
+        st.dataframe(res_df, use_container_width=True)
+
+        # Dışarı aktarma (CSV İndir) butonu
+        csv_data = res_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Listeyi CSV (Excel) Olarak İndir",
+            data=csv_data,
+            file_name="bist_twin_range_listesi.csv",
+            mime="text/csv"
+        )
     else:
-        st.warning("Seçilen tarih aralığında sinyal bulunamadı.")
+        st.warning("Tarama sırasında veri alınamadı.")
