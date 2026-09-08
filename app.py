@@ -24,7 +24,7 @@ with col1:
     st.info("Zaman Dilimi: **1 Gün (1d)**")
 
 with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=5))
+    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=30))
 
 with col3:
     end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
@@ -32,7 +32,7 @@ with col3:
 selection_mode = st.radio("Hisse Seçim Yöntemi:", ["Özel Hisse Seç", "Tüm Listeyi Tara"], horizontal=True)
 
 if selection_mode == "Özel Hisse Seç":
-    selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["EREGL.IS", "THYAO.IS"])
+    selected_stocks = st.multiselect("Hisseler:", options=bist_all_stocks, default=["ASELS.IS"])
 else:
     selected_stocks = bist_all_stocks
 
@@ -76,25 +76,34 @@ def calculate_daily_signals(df, symbol, start_d, end_d):
     df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
 
     signal_rows = []
-    # Canlı/anlık hatalı barları elemek için son mumu (bugünü) tarama dışı bırakıyoruz ( len(df) - 1 )
+    # Canlı barları elemek için son mumu hariç tutuyoruz
     for i in range(60, len(df) - 1):
         idx = df.index[i]
         row = df.iloc[i]
         row_date = pd.to_datetime(idx).date()
         
-        if start_d <= row_date <= end_d:
-            sig = None
-            if row['Long']: sig = "🟢 BUY (AL)"
-            elif row['Short']: sig = "🔴 SELL (SAT)"
+        sig = None
+        if row['Long']: sig = "🟢 BUY (AL)"
+        elif row['Short']: sig = "🔴 SELL (SAT)"
+        
+        if sig:
+            signal_rows.append({
+                'Hisse': symbol.replace('.IS', ''),
+                'Tarih': str(row_date),
+                'Kapanış Fiyatı': round(row['Close'], 2),
+                'Sinyal': sig
+            })
             
-            if sig:
-                signal_rows.append({
-                    'Hisse': symbol.replace('.IS', ''),
-                    'Tarih': str(row_date),
-                    'Kapanış Fiyatı': round(row['Close'], 2),
-                    'Sinyal': sig
-                })
-    return pd.DataFrame(signal_rows)
+    res_df = pd.DataFrame(signal_rows)
+    if not res_df.empty:
+        # Kullanıcının seçtiği tarih aralığına (+/- 1 gün timezone toleransı ekleyerek) filtrele
+        res_df['Tarih_dt'] = pd.to_datetime(res_df['Tarih']).dt.date
+        tol_start = start_d - datetime.timedelta(days=1)
+        tol_end = end_d + datetime.timedelta(days=1)
+        res_df = res_df[(res_df['Tarih_dt'] >= tol_start) & (res_df['Tarih_dt'] <= tol_end)]
+        res_df = res_df.drop(columns=['Tarih_dt'])
+        
+    return res_df
 
 if st.button("Günlük Sinyalleri Taramayı Başlat 🔍", type="primary"):
     all_signals = []
@@ -122,7 +131,7 @@ if st.button("Günlük Sinyalleri Taramayı Başlat 🔍", type="primary"):
     if all_signals:
         final_df = pd.concat(all_signals, ignore_index=True)
         final_df = final_df.sort_values(by="Tarih", ascending=False)
-        st.success(f"Seçilen aralıkta toplam **{len(final_df)}** adet kesinleşmiş sinyal bulundu:")
+        st.success(f"Seçilen aralıkta toplam **{len(final_df)}** adet sinyal bulundu:")
         st.dataframe(final_df, use_container_width=True)
     else:
-        st.warning("Seçilen tarih aralığında kesinleşmiş yeni bir AL veya SAT sinyali bulunamadı.")
+        st.warning("Seçilen tarih aralığında sinyal bulunamadı.")
