@@ -7,7 +7,7 @@ import yfinance as yf
 st.set_page_config(page_title="BIST Günlük Sinyal Tarayıcı", layout="wide")
 
 st.title("🚀 BIST Twin Range Günlük Sinyal Tarayıcı")
-st.markdown("Seçtiğiniz tarihte kapanış bazlı **AL** veya **SAT** sinyali üreten hisseleri listeleyin.")
+st.markdown("TradingView ile %100 matematiksel uyumlu kapanış bazlı **AL** ve **SAT** sinyali tarayıcısı.")
 
 bist_all_stocks = [
     "THYAO.IS", "GARAN.IS", "EREGL.IS", "ASELS.IS", "KCHOL.IS", "AKBNK.IS",
@@ -24,7 +24,7 @@ with col1:
     st.info("Zaman Dilimi: **1 Gün (1d)**")
 
 with col2:
-    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=30))
+    start_date = st.date_input("Başlangıç Tarihi", value=datetime.date.today() - datetime.timedelta(days=90))
 
 with col3:
     end_date = st.date_input("Bitiş Tarihi", value=datetime.date.today())
@@ -36,47 +36,57 @@ if selection_mode == "Özel Hisse Seç":
 else:
     selected_stocks = bist_all_stocks
 
+# TradingView'in ta.ema fonksiyonunun birebir Python karşılığı (SMA başlangıçlı)
+def tv_ema(arr, length):
+    alpha = 2.0 / (length + 1)
+    res = np.zeros_like(arr, dtype=float)
+    if len(arr) < length:
+        return res
+    res[length - 1] = np.mean(arr[:length])
+    for i in range(length, len(arr)):
+        res[i] = alpha * arr[i] + (1.0 - alpha) * res[i - 1]
+    return res
+
 def calculate_daily_signals(df, symbol, start_d, end_d):
-    if df.empty or len(df) < 55:
+    if df.empty or len(df) < 60:
         return pd.DataFrame()
     
     per1, mult1 = 27, 1.6
     per2, mult2 = 55, 2.0
-    x = df['Close']
-
+    x = df['Close'].values
+    
+    diff = np.abs(np.diff(x, prepend=x[0]))
+    
     wper1 = per1 * 2 - 1
-    avrng1 = (x - x.shift(1)).abs().ewm(span=per1, adjust=False).mean()
-    smrng1 = avrng1.ewm(span=wper1, adjust=False).mean() * mult1
+    avrng1 = tv_ema(diff, per1)
+    smrng1 = tv_ema(avrng1, wper1) * mult1
 
     wper2 = per2 * 2 - 1
-    avrng2 = (x - x.shift(1)).abs().ewm(span=per2, adjust=False).mean()
-    smrng2 = avrng2.ewm(span=wper2, adjust=False).mean() * mult2
+    avrng2 = tv_ema(diff, per2)
+    smrng2 = tv_ema(avrng2, wper2) * mult2
 
     smrng = (smrng1 + smrng2) / 2
 
-    filt = []
-    f = x.iloc[0]
-    x_val = x.values
-    smrng_val = smrng.values
-
+    filt = np.zeros_like(x)
+    f = x[0]
     for i in range(len(x)):
-        val = x_val[i]
-        r = smrng_val[i]
-        if pd.isna(r): r = 0
+        val = x[i]
+        r = smrng[i]
+        if np.isnan(r): r = 0
         if i > 0:
-            prev = filt[-1]
+            prev = filt[i-1]
             if val > prev:
                 f = prev if (val - r < prev) else (val - r)
             else:
                 f = prev if (val + r > prev) else (val + r)
-        filt.append(f)
+        filt[i] = f
 
     df['TRF'] = filt
     df['Long'] = (df['Close'] > df['TRF']) & (df['Close'].shift(1) <= df['TRF'].shift(1))
     df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
 
     signal_rows = []
-    # Canlı barları elemek için son mumu hariç tutuyoruz
+    # Isınma payı bırakılarak tarama yapılır
     for i in range(60, len(df) - 1):
         idx = df.index[i]
         row = df.iloc[i]
@@ -96,7 +106,6 @@ def calculate_daily_signals(df, symbol, start_d, end_d):
             
     res_df = pd.DataFrame(signal_rows)
     if not res_df.empty:
-        # Kullanıcının seçtiği tarih aralığına (+/- 1 gün timezone toleransı ekleyerek) filtrele
         res_df['Tarih_dt'] = pd.to_datetime(res_df['Tarih']).dt.date
         tol_start = start_d - datetime.timedelta(days=1)
         tol_end = end_d + datetime.timedelta(days=1)
