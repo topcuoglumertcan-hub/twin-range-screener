@@ -1,140 +1,163 @@
-import datetime
-import numpy as np
 import pandas as pd
-import streamlit as st
+import numpy as np
 import yfinance as yf
 
-st.set_page_config(page_title="BIST Twin Range Toplu Tarayıcı", layout="wide")
+# 1. Kıvanç Özbilgiç - Twin Range Filter Orijinal Matematik Uyarlaması
+def calculate_twin_range_filter(df, per1=27, mult1=1.6, per2=55, mult2=2.0):
+    close = df['Close']
+    
+    # smoothrng fonksiyonu (Wilder / EMA tabanlı)
+    def smoothrng(series, t, m):
+        wper = int(t * 2 - 1)
+        avrng = (series - series.shift(1)).abs().ewm(span=t, adjust=False).mean()
+        return avrng.ewm(span=wper, adjust=False).mean() * m
 
-st.title("🚀 BIST Twin Range Filter - Toplu Sinyal ve Durum Tarayıcı")
-st.markdown("Tüm BIST hisselerini tek ekranda listeleyin, güncel durumlarını görün ve dışarı aktarın.")
+    smrng1 = smoothrng(close, per1, mult1)
+    smrng2 = smoothrng(close, per2, mult2)
+    smrng = (smrng1 + smrng2) / 2
 
-# Genişletilmiş BIST Hisse Listesi (.IS uzantılı)
-bist_all_stocks = [
-    "THYAO.IS", "GARAN.IS", "EREGL.IS", "ASELS.IS", "KCHOL.IS", "AKBNK.IS",
-    "ISCTR.IS", "BIMAS.IS", "PGSUS.IS", "SASA.IS", "TUPRS.IS", "PETKM.IS",
-    "AKCNS.IS", "ALARK.IS", "ARCLK.IS", "ASTOR.IS", "ENKAI.IS", "FROTO.IS",
-    "GESAN.IS", "GUBRF.IS", "KRDMD.IS", "ODAS.IS", "SAHOL.IS", "SISE.IS",
-    "TAVHL.IS", "TOASO.IS", "YKBNK.IS", "BRSAN.IS", "FZLGY.IS"
-]
-
-col1, col2 = st.columns(2)
-with col1:
-    selection_mode = st.radio("Hisse Seçimi:", ["Tüm Listeyi Tara", "Özel Seçim Yap"], horizontal=True)
-
-if selection_mode == "Özel Seçim Yap":
-    selected_stocks = st.multiselect("Hisseleri Seçin:", options=bist_all_stocks, default=["THYAO.IS", "EREGL.IS", "ASELS.IS"])
-else:
-    selected_stocks = bist_all_stocks
-
-# TradingView ile birebir uyumlu EMA (SMA başlangıçlı)
-def tv_ema(arr, length):
-    alpha = 2.0 / (length + 1)
-    res = np.zeros_like(arr, dtype=float)
-    if len(arr) < length:
-        return res
-    res[length - 1] = np.mean(arr[:length])
-    for i in range(length, len(arr)):
-        res[i] = alpha * arr[i] + (1.0 - alpha) * res[i - 1]
-    return res
-
-def analyze_stock(symbol):
-    try:
-        df = yf.download(symbol, period="max", interval="1d", progress=False)
-        if df.empty or len(df) < 60:
-            return None
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        per1, mult1 = 27, 1.6
-        per2, mult2 = 55, 2.0
-        x = df['Close'].values
-        
-        diff = np.abs(np.diff(x, prepend=x[0]))
-        
-        wper1 = per1 * 2 - 1
-        avrng1 = tv_ema(diff, per1)
-        smrng1 = tv_ema(avrng1, wper1) * mult1
-
-        wper2 = per2 * 2 - 1
-        avrng2 = tv_ema(diff, per2)
-        smrng2 = tv_ema(avrng2, wper2) * mult2
-
-        smrng = (smrng1 + smrng2) / 2
-
-        filt = np.zeros_like(x)
-        f = x[0]
-        for i in range(len(x)):
+    # rngfilt ardışık döngü mantığı
+    x = close.values
+    r = smrng.values
+    rngfilt = np.zeros(len(x))
+    
+    for i in range(len(x)):
+        if i == 0:
+            rngfilt[i] = x[i]
+        else:
+            prev = rngfilt[i-1]
             val = x[i]
-            r = smrng[i]
-            if np.isnan(r): r = 0
-            if i > 0:
-                prev = filt[i-1]
+            ri = r[i]
+            if np.isnan(ri):
+                rngfilt[i] = prev
+            else:
                 if val > prev:
-                    f = prev if (val - r < prev) else (val - r)
+                    rngfilt[i] = prev if (val - ri < prev) else (val - ri)
                 else:
-                    f = prev if (val + r > prev) else (val + r)
-            filt[i] = f
+                    rngfilt[i] = prev if (val + ri > prev) else (val + ri)
 
-        df['TRF'] = filt
-        df['Long'] = (df['Close'] > df['TRF']) & (df['Close'].shift(1) <= df['TRF'].shift(1))
-        df['Short'] = (df['Close'] < df['TRF']) & (df['Close'].shift(1) >= df['TRF'].shift(1))
-        df['Is_Long_Trend'] = df['Close'] > df['TRF']
+    df['Filt'] = rngfilt
+    str_val = df['Filt'] + smrng
+    sts_val = df['Filt'] - smrng
 
-        # Son durumu al
-        current_trend = "AL" if df['Is_Long_Trend'].iloc[-2] else "SAT" # Canlı bar hariç kapanmış son gün
-        
-        # Son sinyal tarihini ve fiyatını bul
-        sig_date = "-"
-        sig_price = 0.0
-        
-        for i in range(len(df)-2, 59, -1):
-            if df['Long'].iloc[i] or df['Short'].iloc[i]:
-                sig_date = str(df.index[i].date())
-                sig_price = round(df['Close'].iloc[i], 2)
-                break
+    # FUB ve FLB ardışık hesaplama döngüsü
+    fub = np.zeros(len(close))
+    flb = np.zeros(len(close))
+    c_val = close.values
+    
+    for i in range(len(close)):
+        if i == 0:
+            fub[i] = str_val.iloc[i] if not np.isnan(str_val.iloc[i]) else c_val[i]
+            flb[i] = sts_val.iloc[i] if not np.isnan(sts_val.iloc[i]) else c_val[i]
+        else:
+            prev_fub = fub[i-1]
+            prev_flb = flb[i-1]
+            s_val = str_val.iloc[i]
+            st_val = sts_val.iloc[i]
+            c_prev = c_val[i-1]
+            
+            # FUB
+            if np.isnan(s_val):
+                fub[i] = prev_fub
+            else:
+                fub[i] = s_val if (s_val < prev_fub or c_prev > prev_fub) else prev_fub
+                
+            # FLB
+            if np.isnan(st_val):
+                flb[i] = prev_flb
+            else:
+                flb[i] = st_val if (st_val > prev_flb or c_prev < prev_flb) else prev_flb
 
-        return {
-            'Hisse': symbol.replace('.IS', ''),
-            'Güncel Fiyat': round(df['Close'].iloc[-2], 2),
-            'Durum': current_trend,
-            'Sinyal Tarihi': sig_date,
-            'Sinyal Fiyatı': sig_price
-        }
-    except Exception as e:
-        return None
+    df['FUB'] = fub
+    df['FLB'] = flb
 
-if st.button("Toplu Taramayı Başlat 🔍", type="primary"):
+    # TRF (Trend Range Filter) mantığı
+    trf = np.zeros(len(close))
+    for i in range(len(close)):
+        if i == 0:
+            trf[i] = fub[i]
+        else:
+            t_prev = trf[i-1]
+            f_curr = fub[i]
+            f_prev = fub[i-1]
+            lb_curr = flb[i]
+            lb_prev = flb[i-1]
+            c_curr = c_val[i]
+            
+            if t_prev == f_prev and c_curr <= f_curr:
+                trf[i] = f_curr
+            elif t_prev == f_prev and c_curr >= f_curr:
+                trf[i] = lb_curr
+            elif t_prev == lb_prev and c_curr >= lb_curr:
+                trf[i] = lb_curr
+            elif t_prev == lb_prev and c_curr <= f_curr:
+                trf[i] = f_curr
+            else:
+                trf[i] = f_curr
+
+    df['TRF'] = trf
+    df['Trend'] = np.where(close > df['TRF'], 'AL', 'SAT')
+    
+    # Kesişimler (Long / Short)
+    df['Long'] = (close > df['TRF']) & (close.shift(1) <= df['TRF'].shift(1))
+    df['Short'] = (close < df['TRF']) & (close.shift(1) >= df['TRF'].shift(1))
+    
+    return df
+
+# 2. Tüm BIST Hisselerini Tarama Fonksiyonu
+def scan_bist(ticker_list):
     results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    print(f"Toplam {len(ticker_list)} hisse taranıyor...")
+    
+    for symbol in ticker_list:
+        try:
+            yf_symbol = f"{symbol}.IS"
+            df = yf.download(yf_symbol, period="6mo", interval="1d", progress=False)
+            
+            if df.empty or len(df) < 60:
+                continue
+                
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+                
+            df = calculate_twin_range_filter(df)
+            
+            current_close = df['Close'].iloc[-1]
+            current_trend = df['Trend'].iloc[-1]
+            
+            # Son sinyal tarihi ve fiyatı
+            sig_date = "-"
+            sig_price = "-"
+            sig_type = "-"
+            
+            for i in range(len(df)-1, 0, -1):
+                if df['Long'].iloc[i]:
+                    sig_date = df.index[i].strftime('%Y-%m-%d')
+                    sig_price = round(float(df['Close'].iloc[i]), 2)
+                    sig_type = "AL"
+                    break
+                elif df['Short'].iloc[i]:
+                    sig_date = df.index[i].strftime('%Y-%m-%d')
+                    sig_price = round(float(df['Close'].iloc[i]), 2)
+                    sig_type = "SAT"
+                    break
+            
+            results.append({
+                'Hisse': symbol,
+                'Fiyat': round(float(current_close), 2),
+                'Durum': current_trend,
+                'Son Sinyal': sig_type,
+                'Sinyal Tarihi': sig_date,
+                'Sinyal Fiyatı': sig_price
+            })
+        except Exception as e:
+            continue
+            
+    return pd.DataFrame(results)
 
-    total = len(selected_stocks)
-    for idx, symbol in enumerate(selected_stocks):
-        status_text.text(f"Taranıyor ({idx+1}/{total}): {symbol}...")
-        res = analyze_stock(symbol)
-        if res:
-            results.append(res)
-        progress_bar.progress((idx + 1) / total)
+# --- TEST LİSTESİ (Buraya 600 hissenin kodunu ekleyebilirsin) ---
+bist_ornek = ['THYAO', 'ASELS', 'EREGL', 'KCHOL', 'GARAN', 'BIMAS', 'PGSUS', 'TUPRS', 'AKBNK', 'ISCTR']
 
-    status_text.text("Tarama tamamlandı!")
-    progress_bar.empty()
-
-    if results:
-        res_df = pd.DataFrame(results)
-        st.success(f"Toplam **{len(res_df)}** hisse başarıyla tarandı:")
-        
-        # Ekranda göster
-        st.dataframe(res_df, use_container_width=True)
-
-        # Dışarı aktarma (CSV İndir) butonu
-        csv_data = res_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Listeyi CSV (Excel) Olarak İndir",
-            data=csv_data,
-            file_name="bist_twin_range_listesi.csv",
-            mime="text/csv"
-        )
-    else:
-        st.warning("Tarama sırasında veri alınamadı.")
+# Taramayı çalıştır ve sonuçları göster
+sonuc_df = scan_bist(bist_ornek)
+print(sonuc_df.to_string(index=False))
