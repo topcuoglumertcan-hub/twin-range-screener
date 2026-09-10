@@ -161,3 +161,12 @@ bist_ornek = ['THYAO', 'ASELS', 'EREGL', 'KCHOL', 'GARAN', 'BIMAS', 'PGSUS', 'TU
 # Taramayı çalıştır ve sonuçları göster
 sonuc_df = scan_bist(bist_ornek)
 print(sonuc_df.to_string(index=False))
+import streamlit as st
+
+st.title("BIST Twin Range Filter Tarayıcı")
+
+# Eğer tarama bittiyse sonuçları ekrana basması için:
+if 'sonuc_df' in locals() and not sonuc_df.empty:
+    st.dataframe(sonuc_df, use_container_width=True)
+else:
+    st.info("Tarama yapılıyor veya liste bekleniyor...")
